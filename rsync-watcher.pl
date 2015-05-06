@@ -13,15 +13,14 @@ my @default_excludes = (
     ".hg",       ".cache", ".idea", "nbproject",
     "~*",        "*.tmp",  "*.pyc", "*.swp",
 );
+my %flags = (
+    verbose => 0,
+    help    => 0,
+    quiet   => 0,
+    add     => 0,
+);
 
 sub loadFlags {
-
-    my %flags = (
-        verbose => 0,
-        help    => 0,
-        quiet   => 0,
-        add     => 0,
-    );
 
     GetOptions(
         "v"       => \$flags{verbose},
@@ -33,8 +32,6 @@ sub loadFlags {
         "a"       => \$flags{add},
         "add"     => \$flags{add},
     );
-
-    return %flags;
 }
 
 sub saveConf {
@@ -329,7 +326,7 @@ sub build {
 
     my $sshpassExe = $v->{pass} ? " sshpass -p \"$v->{pass}\" " : "";
     my $sshExe
-        = $v->{port} != 22 ? " ssh -oBatchMode=no -p $v->{port}' " : "";
+        = $v->{port} != 22 ? " ssh -oBatchMode=no -p $v->{port} " : "";
 
     my $sshE = "";
 
@@ -341,28 +338,33 @@ sub build {
         = "rsync -zqrhI "
         . "$sshE $excludeLine $v->{path} "
         . " $v->{user}\@$v->{host}:$v->{remPath}";
-    print "RSYNC $v->{path} to $v->{host}:$v->{port}$v->{remPath}\n";
-    print "$exe\n";
+    print "RSYNC $v->{path} to $v->{host}:$v->{port}$v->{remPath}\n" if !$flags{quiet};
+    print "$exe\n" if $flags{verbose};
     system($exe);
 }
 
 sub run () {
 
-    my %flags  = loadFlags();
+    loadFlags();
     my $config = loadConf();
 
-    print Dumper($config);
+    if ( $flags{help} ) {
+        help();
+        exit();
+    }
+
+    print "--> Start...\n" if $flags{verbose};
 
     if ( $flags{add} ) {
         if ( my $location = addLocation() ) {
-            push( $config, $location );
+            push( @$config, $location );
             saveConf($config);
         }
     }
 
-    print Dumper($config);
+    print Dumper($config) if $flags{verbose};
     my $timeSleep = 1;
-    print "--> Start run monitor: Files changed, Building...\n";
+    print "--> Start run monitor: Files changed, Building...\n" if !$flags{quiet};
     while (1) {
         update_sha($config);
         my $viewMessage = 0;
@@ -374,11 +376,51 @@ sub run () {
             }
         }
         if ($viewMessage) {
-            print "\n--> Monitor: Files changed, Building...\n";
+            print "\n--> Monitor: Files changed, Building...\n" if !$flags{quiet};
         }
         sleep($timeSleep);
     }
 }
 
-print "--> Start...\n";
 run();
+
+sub help {
+    print <<HELP
+
+It's a watcher which monitors for directories and starts rsync for each changes. Script was written with PERL.
+Introduction
+
+No yet
+Installing and starting
+
+First. Install perl modules:
+
+> sudo cpan Data::Dumper File::HomeDir Getopt::Long
+
+Second. Download https://raw.githubusercontent.com/iostrovok/rsync-watcher/master/rsync-watcher.pl to your computer or "git clone" https://github.com/iostrovok/rsync-watcher/.
+
+Third. Run program:
+
+> perl rsync-watcher.pl
+
+How use
+
+Add new location for monitoring.
+
+> perl rsync-watcher.pl -a
+# or
+> perl rsync-watcher.pl --add
+
+Help
+
+> perl rsync-watcher.pl -h
+# or 
+> perl rsync-watcher.pl --help
+
+Run
+
+> perl rsync-watcher.pl
+
+HELP
+}
+
