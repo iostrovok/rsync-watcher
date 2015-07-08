@@ -5,8 +5,12 @@ use strict;
 use Data::Dumper;
 use File::HomeDir;
 use Getopt::Long;
+use Digest::CRC qw( crc16 );
 
 use constant FILE => '/.perlrsync';
+
+#check_files();
+#exit();
 
 my @default_excludes = (
     ".realsync", "CVS",    ".git",  ".svn",
@@ -253,6 +257,8 @@ sub promptUser {
 sub emptyPath {
     my %in = @_;
     return {
+        sha_files => {},
+
         path    => "",
         sha_new => '',
         sha_old => '',
@@ -313,11 +319,56 @@ sub update_sha {
     }
 }
 
-sub build {
+sub check_files {
     my ($v) = @_;
+    my $path = $v->{path};
 
-    #my @exclude = map {"--exclude '$_'"} @{ $v->{ignor} };
-    #my $excludeLine = join( ' ', @exclude );
+    my $t = `ls -lRTucit $path`;
+    my @list = split( /\n/, $t );
+
+    if ( @list && $list[0] =~ m/^total .*/ ) {
+        shift @list;
+    }
+
+    my @update_files;
+    my %delete_files = map { ( $_ => 1 ) } ( keys %{ $v->{sha_files} } );
+    my $count = 0;
+
+    for ( my $i = 0; $i < @list; $i++ ) {
+
+        next unless $list[$i];
+
+        if (   $i < $#list
+            && $list[$i] =~ m/\:$/
+            && $list[ $i + 1 ] =~ m/^total\s+(\d+)/ )
+        {
+            $path = $list[$i];
+            $path =~ s{\:$}{/};
+            $i++;
+            next;
+        }
+
+    # 28122586 -rw-r--r--  1 ostrovok  wheel  2999 Jul  1 11:26:05 2015 cms.go
+        my @s = split /\s+/, $list[$i];
+        my $file = $path . pop(@s);
+        next unless -f $file;
+
+        $count++;
+        my $key = crc16( join( ' ', @s ) );
+        delete $delete_files{$file} if $delete_files{$file};
+        unless ( $v->{sha_files}{$file} && $v->{sha_files}{$file} eq $key ) {
+            push @update_files, $file;
+            $v->{sha_files}{$file} = $key;
+        }
+    }
+
+    my $return_all = $count / 3 < scalar(@update_files) ? 1 : 0;
+
+    return ( $return_all, [@update_files], [ keys %delete_files ] );
+}
+
+sub _prepare_build {
+    my ($v) = @_;
 
     my $excludeLine
         = @{ $v->{ignor} }
@@ -333,14 +384,41 @@ sub build {
         $sshE = "-e '$sshpassExe $sshExe'";
     }
 
-    my $exe
-        = "rsync -zqrhI "
-        . "$sshE $excludeLine $v->{path} "
-        . " $v->{user}\@$v->{host}:$v->{remPath}";
-    viewInfo("RSYNC $v->{path} to $v->{host}:$v->{port}$v->{remPath}")
-        if !$flags{quiet};
+    return
+          "rsync -zqrhI "
+        . "$sshE $excludeLine %s "
+        . " $v->{user}\@$v->{host}:%s";
+}
+
+sub exe_build {
+    my ( $exe_line, $path, $host, $port, $remPath ) = @_;
+    viewInfo("RSYNC $path to $host:$port$remPath ");
+
+    my $exe = sprintf( $exe_line, $path, $remPath );
     print "$exe\n" if $flags{verbose};
     system($exe);
+}
+
+sub build_files {
+    my ( $v, $update_files ) = @_;
+
+    my $exe_line = _prepare_build($v);
+
+    foreach my $file (@$update_files) {
+
+        my $rem_file = $file;
+        $rem_file =~ s{$v->{path}}{};
+        $rem_file = $v->{remPath} . $rem_file;
+
+        exe_build( $exe_line, $file, $v->{host}, $v->{port}, $rem_file );
+    }
+}
+
+sub build {
+    my ($v) = @_;
+
+    my $exe_line = _prepare_build($v);
+    exe_build( $exe_line, $v->{path}, $v->{host}, $v->{port}, $v->{remPath} );
 }
 
 sub run () {
@@ -364,21 +442,36 @@ sub run () {
 
     print Dumper($config) if $flags{verbose};
     my $timeSleep = 1;
-    viewInfo("--> Start run monitor: Files changed, Building...")
-        if !$flags{quiet};
+    viewInfo("--> Start run monitor: Files changed, Building...");
     while (1) {
         update_sha($config);
         my $viewMessage = 0;
         foreach my $v (@$config) {
             if ( $v->{sha_new} ne $v->{sha_old} ) {
-                build($v);
+                my ( $update_all, $update_files, $delete_files )
+                    = check_files($v);
+
+                #print '$delete_files',   Dumper($delete_files);
+                print '$update_all: ', $update_all, "\n";
+
+                if ($update_all) {
+                    build($v);
+                }
+                elsif (@$update_files) {
+                    build_files( $v, $update_files );
+                }
+
+                if (@$delete_files) {
+
+                }
+
+                #build($v);
                 $v->{sha_old} = $v->{sha_new};
                 $viewMessage = 1;
             }
         }
         if ($viewMessage) {
-            viewInfo("--> Monitor: Files changed, Building...\n")
-                if !$flags{quiet};
+            viewInfo("--> Monitor: Files changed, Building...\n");
         }
         sleep($timeSleep);
     }
@@ -386,6 +479,8 @@ sub run () {
 
 sub viewInfo {
     my $line = shift;
+
+    return if $flags{quiet};
 
     my ( $sec, $min, $hour, $mday, $mon, $year ) = localtime(time);
     $year += 1900;
