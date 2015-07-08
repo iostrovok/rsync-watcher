@@ -325,8 +325,7 @@ sub build {
         : "";
 
     my $sshpassExe = $v->{pass} ? " sshpass -p \"$v->{pass}\" " : "";
-    my $sshExe
-        = $v->{port} != 22 ? " ssh -oBatchMode=no -p $v->{port} " : "";
+    my $sshExe = $v->{port} != 22 ? " ssh -oBatchMode=no -p $v->{port} " : "";
 
     my $sshE = "";
 
@@ -338,7 +337,8 @@ sub build {
         = "rsync -zqrhI "
         . "$sshE $excludeLine $v->{path} "
         . " $v->{user}\@$v->{host}:$v->{remPath}";
-    print "RSYNC $v->{path} to $v->{host}:$v->{port}$v->{remPath}\n" if !$flags{quiet};
+    viewInfo("RSYNC $v->{path} to $v->{host}:$v->{port}$v->{remPath}")
+        if !$flags{quiet};
     print "$exe\n" if $flags{verbose};
     system($exe);
 }
@@ -364,7 +364,8 @@ sub run () {
 
     print Dumper($config) if $flags{verbose};
     my $timeSleep = 1;
-    print "--> Start run monitor: Files changed, Building...\n" if !$flags{quiet};
+    viewInfo("--> Start run monitor: Files changed, Building...")
+        if !$flags{quiet};
     while (1) {
         update_sha($config);
         my $viewMessage = 0;
@@ -376,10 +377,21 @@ sub run () {
             }
         }
         if ($viewMessage) {
-            print "\n--> Monitor: Files changed, Building...\n" if !$flags{quiet};
+            viewInfo("--> Monitor: Files changed, Building...\n")
+                if !$flags{quiet};
         }
         sleep($timeSleep);
     }
+}
+
+sub viewInfo {
+    my $line = shift;
+
+    my ( $sec, $min, $hour, $mday, $mon, $year ) = localtime(time);
+    $year += 1900;
+
+    printf( "[%4d-%02d-%02d %02d:%02d:%02d] %s\n",
+        $year, $mon, $mday, $hour, $min, $sec, $line );
 }
 
 run();
