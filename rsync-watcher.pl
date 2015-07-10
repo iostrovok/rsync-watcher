@@ -5,7 +5,7 @@ use strict;
 use Data::Dumper;
 use File::HomeDir;
 use Getopt::Long;
-use Digest::CRC qw( crc16 );
+use Digest::CRC qw[ crc16 ];
 
 use constant FILE => '/.perlrsync';
 
@@ -332,8 +332,9 @@ sub check_files {
 
     my @update_files;
     my %delete_files = map { ( $_ => 1 ) } ( keys %{ $v->{sha_files} } );
-    my $count = 0;
+    my %dirs = ( $path => 1 );
 
+    my $count = 0;
     for ( my $i = 0; $i < @list; $i++ ) {
 
         next unless $list[$i];
@@ -344,6 +345,8 @@ sub check_files {
         {
             $path = $list[$i];
             $path =~ s{\:$}{/};
+            $dirs{$path} = 0 unless exists $dirs{$path};
+
             $i++;
             next;
         }
@@ -354,6 +357,7 @@ sub check_files {
         next unless -f $file;
 
         $count++;
+        $dirs{$path}++;
         my $key = crc16( join( ' ', @s ) );
         delete $delete_files{$file} if $delete_files{$file};
         unless ( $v->{sha_files}{$file} && $v->{sha_files}{$file} eq $key ) {
@@ -364,7 +368,35 @@ sub check_files {
 
     my $return_all = $count / 3 < scalar(@update_files) ? 1 : 0;
 
-    return ( $return_all, [@update_files], [ keys %delete_files ] );
+    # Get empty dirs:
+    my @d_dirs = grep { not exists $dirs{$_} } ( keys %{ $v->{sha_dirs} } );
+    my @update_dirs
+        = grep { not exists( $v->{sha_dirs}{$_} ) } ( keys %dirs );
+    $v->{sha_dirs} = {%dirs};
+
+    my @d_files = keys %delete_files;
+    for my $file (@d_files) {
+        for my $dir (@d_dirs) {
+            if ( $file =~ m{$dir} ) {
+                delete $delete_files{$file};
+                last;
+            }
+        }
+    }
+
+    return ( $return_all, [@update_files], [@update_dirs],
+        [ keys %delete_files ],
+        [@d_dirs] );
+}
+
+sub _prepare_delete {
+    my ($v) = @_;
+
+    my $sshExe
+        = $v->{port} != 22 ? "ssh -oBatchMode=no -p $v->{port}" : "ssh";
+    my $sshpassExe = $v->{pass} ? "sshpass -p \"$v->{pass}\"" : "";
+
+    return "$sshpassExe $sshExe $v->{user}\@$v->{host} \"rm -R %s\" ";
 }
 
 sub _prepare_build {
@@ -395,12 +427,14 @@ sub exe_build {
     viewInfo("RSYNC $path to $host:$port$remPath ");
 
     my $exe = sprintf( $exe_line, $path, $remPath );
-    print "$exe\n" if $flags{verbose};
+    viewVerbose($exe);
     system($exe);
 }
 
 sub build_files {
     my ( $v, $update_files ) = @_;
+
+    return unless @$update_files;
 
     my $exe_line = _prepare_build($v);
 
@@ -421,6 +455,30 @@ sub build {
     exe_build( $exe_line, $v->{path}, $v->{host}, $v->{port}, $v->{remPath} );
 }
 
+sub build_delete {
+    my ( $v, $files_dirs ) = @_;
+
+    return unless @$files_dirs;
+
+    my $line = _prepare_delete($v);
+
+    my $remPath = $v->{remPath} . '/';
+    my $path    = $v->{path} . '/';
+
+    $path =~ s{/+}{/}gos;
+    $remPath =~ s{/+}{/}gos;
+
+    foreach my $file (@$files_dirs) {
+
+        $file =~ s{/+}{/}gos;
+        $file =~ s#^$path#$remPath#;
+
+        my $exe = sprintf( "$line", $file );
+        viewVerbose($exe);
+        system($exe);
+    }
+}
+
 sub run () {
 
     loadFlags();
@@ -431,7 +489,7 @@ sub run () {
         exit();
     }
 
-    print "--> Start...\n" if $flags{verbose};
+    viewVerbose("--> Start...");
 
     if ( $flags{add} ) {
         if ( my $location = addLocation() ) {
@@ -440,7 +498,7 @@ sub run () {
         }
     }
 
-    print Dumper($config) if $flags{verbose};
+    viewVerbose(Dumper($config));
     my $timeSleep = 1;
     viewInfo("--> Start run monitor: Files changed, Building...");
     while (1) {
@@ -448,24 +506,23 @@ sub run () {
         my $viewMessage = 0;
         foreach my $v (@$config) {
             if ( $v->{sha_new} ne $v->{sha_old} ) {
-                my ( $update_all, $update_files, $delete_files )
-                    = check_files($v);
-
-                #print '$delete_files',   Dumper($delete_files);
-                print '$update_all: ', $update_all, "\n";
+                my ($update_all,   $update_files, $update_dirs,
+                    $delete_files, $delete_dirs
+                ) = check_files($v);
 
                 if ($update_all) {
+                    viewVerbose("We're updating top dir");
                     build($v);
                 }
-                elsif (@$update_files) {
+                else {
+                    viewVerbose("We're updating by files & dirs");
+                    build_files( $v, $update_dirs );
                     build_files( $v, $update_files );
                 }
 
-                if (@$delete_files) {
+                build_delete( $v, $delete_files );
+                build_delete( $v, $delete_dirs );
 
-                }
-
-                #build($v);
                 $v->{sha_old} = $v->{sha_new};
                 $viewMessage = 1;
             }
@@ -487,6 +544,11 @@ sub viewInfo {
 
     printf( "[%4d-%02d-%02d %02d:%02d:%02d] %s\n",
         $year, $mon, $mday, $hour, $min, $sec, $line );
+}
+
+sub viewVerbose {
+    return unless $flags{verbose};
+    print join( "\n", @_ ), "\n";
 }
 
 run();
