@@ -9,9 +9,6 @@ use Digest::CRC qw[ crc16 ];
 
 use constant FILE => '/.perlrsync';
 
-#check_files();
-#exit();
-
 my @default_excludes = (
     ".realsync", "CVS",    ".git",  ".svn",
     ".hg",       ".cache", ".idea", "nbproject",
@@ -22,6 +19,7 @@ my %flags = (
     help    => 0,
     quiet   => 0,
     add     => 0,
+    debug   => 0,
 );
 
 sub loadFlags {
@@ -35,6 +33,8 @@ sub loadFlags {
         "quiet"   => \$flags{quiet},
         "a"       => \$flags{add},
         "add"     => \$flags{add},
+        "d"       => \$flags{debug},
+        "debug"   => \$flags{debug},
     );
 }
 
@@ -282,6 +282,7 @@ sub loadConf {
     my $id     = "";
     my $values = {};
     foreach my $s (@lines) {
+        next if $s =~ m/^\s*\#.*/;
         chomp($s);
         next unless $s;
         my ( $tag, $val ) = split( /\s*=>\s*/, $s, 2 );
@@ -363,6 +364,8 @@ sub check_files {
         unless ( $v->{sha_files}{$file} && $v->{sha_files}{$file} eq $key ) {
             push @update_files, $file;
             $v->{sha_files}{$file} = $key;
+
+            #viewDebug("push \@update_files, $file;");
         }
     }
 
@@ -424,6 +427,7 @@ sub _prepare_build {
 
 sub exe_build {
     my ( $exe_line, $path, $host, $port, $remPath ) = @_;
+    viewDebug("$exe_line, $path, $host, $port, $remPath ");
     viewInfo("RSYNC $path to $host:$port$remPath ");
 
     my $exe = sprintf( $exe_line, $path, $remPath );
@@ -432,17 +436,27 @@ sub exe_build {
 }
 
 sub build_files {
-    my ( $v, $update_files ) = @_;
+    my ( $v, $update_files, $is_dir ) = @_;
 
     return unless @$update_files;
+
+    viewDebug( " build_files. is_dir: $is_dir, update_files: "
+            . join( ", ", @$update_files ) );
 
     my $exe_line = _prepare_build($v);
 
     foreach my $file (@$update_files) {
 
+        viewDebug("$file =~ s{$v->{path}}{}");
+
         my $rem_file = $file;
         $rem_file =~ s{$v->{path}}{};
         $rem_file = $v->{remPath} . $rem_file;
+
+        if ($is_dir) {
+            $rem_file .= '/';
+            $file     .= '/';
+        }
 
         exe_build( $exe_line, $file, $v->{host}, $v->{port}, $rem_file );
     }
@@ -452,7 +466,11 @@ sub build {
     my ($v) = @_;
 
     my $exe_line = _prepare_build($v);
-    exe_build( $exe_line, $v->{path}, $v->{host}, $v->{port}, $v->{remPath} );
+
+    my $remPath = $v->{remPath} . ( $v->{remPath} =~ m{/$} ? ''  : '/' );
+    my $path    = $v->{path} .    ( $v->{path} =~ m{/$}    ? ' ' : '/' );
+
+    exe_build( $exe_line, $path, $v->{host}, $v->{port}, $remPath );
 }
 
 sub build_delete {
@@ -498,7 +516,7 @@ sub run () {
         }
     }
 
-    viewVerbose(Dumper($config));
+    viewVerbose( Dumper($config) );
     my $timeSleep = 1;
     viewInfo("--> Start run monitor: Files changed, Building...");
     while (1) {
@@ -516,8 +534,8 @@ sub run () {
                 }
                 else {
                     viewVerbose("We're updating by files & dirs");
-                    build_files( $v, $update_dirs );
-                    build_files( $v, $update_files );
+                    build_files( $v, $update_dirs,  1 );
+                    build_files( $v, $update_files, 0 );
                 }
 
                 build_delete( $v, $delete_files );
@@ -532,6 +550,14 @@ sub run () {
         }
         sleep($timeSleep);
     }
+}
+
+sub viewDebug {
+    my $line = shift;
+
+    return unless $flags{debug};
+
+    print "===> DEBUG ", $line, "\n";
 }
 
 sub viewInfo {
