@@ -335,7 +335,8 @@ sub check_files {
     my %delete_files = map { ( $_ => 1 ) } ( keys %{ $v->{sha_files} } );
     my %dirs = ( $path => 1 );
 
-    my $count = 0;
+    my $count         = 0;
+    my $new_sha_files = {};
     for ( my $i = 0; $i < @list; $i++ ) {
 
         next unless $list[$i];
@@ -363,11 +364,14 @@ sub check_files {
         delete $delete_files{$file} if $delete_files{$file};
         unless ( $v->{sha_files}{$file} && $v->{sha_files}{$file} eq $key ) {
             push @update_files, $file;
-            $v->{sha_files}{$file} = $key;
+            #$v->{sha_files}{$file} = $key;
+            $new_sha_files->{$file} = $key;
 
             #viewDebug("push \@update_files, $file;");
         }
     }
+
+    $v->{sha_files} = $new_sha_files;
 
     my $return_all = $count / 3 < scalar(@update_files) ? 1 : 0;
 
@@ -492,6 +496,7 @@ sub build_delete {
         $file =~ s#^$path#$remPath#;
 
         my $exe = sprintf( "$line", $file );
+        print $exe, "\n";
         viewVerbose($exe);
         system($exe);
     }
